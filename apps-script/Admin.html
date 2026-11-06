@@ -1,0 +1,36 @@
+<!doctype html><html lang="pt-BR"><head><base target="_top"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+*{box-sizing:border-box}body{font:15px/1.6 system-ui,sans-serif;color:#5e0d57;background:#fff9ee;padding:20px;margin:0}h1{font:30px Georgia,serif;margin:0 0 8px}p{margin:0 0 16px}button,select,input{font:inherit;padding:12px;border-radius:8px;border:1px solid #ead9c1;background:white;color:#5e0d57;min-height:46px;cursor:pointer}button:focus-visible,select:focus-visible{outline:3px solid #3c681b;outline-offset:3px}button:disabled{cursor:wait;opacity:.55}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-block:14px}.slots{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.slot{background:#eff5ed;color:#3c681b;border-color:#cbdcc7}.slot.busy{color:#9c263a;background:#f9e1e6;border-color:#dfb8c1}.slot small{display:block;font-size:11px}.primary{background:#c91622;color:white}.note{font-size:12px;color:#796569}#status{min-height:26px;font-size:13px}#counts{font-weight:600}@media(max-width:450px){body{padding:10px}.slots{grid-template-columns:repeat(2,1fr)}}
+</style></head><body>
+<h1>Agenda da Carol 🐾</h1><p class="note">Clique em um horário para alterar. A confirmação aparece só depois de salvar na planilha.</p><div class="toolbar"><label for="day">Dia de dezembro</label><select id="day" disabled></select><button id="refresh" disabled>↻ Atualizar</button></div><p id="counts"></p><div id="slots" class="slots"></div><div class="toolbar"><button id="block" class="primary" disabled>Bloquear o dia</button><button id="free" disabled>Liberar o dia</button></div><fieldset style="border:1px solid #ead9c1;border-radius:10px"><legend>Dados do pet confirmado</legend><div class="toolbar"><label>Horário <select id="pet-time" disabled></select></label><label>Cachorro ou gato? <select id="pet-species" disabled><option value="">Selecione</option><option>Cachorro</option><option>Gato</option></select></label><label>Raça <input id="pet-breed" maxlength="80" placeholder="Ex.: Shih-tzu ou SRD" disabled></label><button id="pet-save" class="primary" disabled>Salvar dados e ocupar horário</button></div><p class="note">Preencha com os dados recebidos no WhatsApp, após confirmar com o cliente. Liberar o horário apaga a espécie e a raça desse atendimento.</p></fieldset><p id="status" role="status" aria-live="polite">Carregando…</p><p class="note">A agenda pública consulta a planilha a cada 30 segundos. Atualize aqui antes de editar se outra janela estiver em uso.</p>
+<script>
+let state=null,pending=false;const $=id=>document.getElementById(id);
+function render(){
+  $('slots').replaceChildren();if(!state)return;
+  const date=$('day').value,rows=state.slots.filter(s=>s.date===date),busy=rows.filter(s=>s.status==='ocupado').length;
+  const totalBusy=state.slots.filter(s=>s.status==='ocupado').length;
+  $('counts').textContent=`Neste dia: ${rows.length-busy} livres · ${busy} ocupados | Total: ${state.slots.length-totalBusy} livres · ${totalBusy} ocupados`;
+  const previous=$('pet-time').value;
+  $('pet-time').replaceChildren();
+  rows.forEach(s=>{const o=document.createElement('option');o.value=s.time;o.textContent=s.time;$('pet-time').append(o);});
+  if(rows.some(s=>s.time===previous))$('pet-time').value=previous;
+  rows.forEach(s=>{const b=document.createElement('button');b.className='slot'+(s.status==='ocupado'?' busy':'');b.textContent=s.time;const label=document.createElement('small');label.textContent=(s.status==='ocupado'?'Ocupado · liberar':'Disponível · bloquear')+(s.species?' · '+s.species+' · '+s.breed:'');b.append(label);b.disabled=pending;b.setAttribute('aria-label',`${s.time}, ${label.textContent}`);b.onclick=()=>save([{key:s.date+'|'+s.time,status:s.status==='ocupado'?'disponivel':'ocupado'}]);$('slots').append(b);});
+}
+function setPending(value){pending=value;for(const id of ['day','refresh','block','free','pet-time','pet-species','pet-breed','pet-save'])$(id).disabled=value||!state;render();}
+function failure(error){setPending(false);$('status').textContent=(error&&error.message)||'Não foi possível confirmar. Atualize para conferir o estado na planilha.';}
+function receive(result){
+  state=result;
+  if(!$('day').options.length)Array.from(new Set(state.slots.map(s=>s.date))).forEach(date=>{const o=document.createElement('option');o.value=date;o.textContent=date.slice(8)+' de dezembro';$('day').append(o);});
+  setPending(false);fillPet();
+}
+function load(){setPending(true);$('status').textContent='Atualizando…';google.script.run.withSuccessHandler(data=>{receive(data);$('status').textContent='Agenda atualizada.';}).withFailureHandler(failure).getAdminData();}
+function save(changes){if(pending||!state)return;setPending(true);$('status').textContent='Salvando na planilha…';google.script.run.withSuccessHandler(data=>{receive(data);$('status').textContent='✓ Alteração salva e confirmada na planilha.';}).withFailureHandler(failure).saveAdminSlots({revision:state.revision,changes});}
+function fillPet(){const slot=state?.slots.find(s=>s.date===$('day').value&&s.time===$('pet-time').value);$('pet-species').value=slot?.species||'';$('pet-breed').value=slot?.breed||'';}
+$('pet-time').onchange=fillPet;
+$('pet-save').onclick=()=>{if(!['Cachorro','Gato'].includes($('pet-species').value)||!$('pet-breed').value.trim()){$('status').textContent='Selecione cachorro ou gato e informe a raça (ou SRD).';return;}save([{key:$('day').value+'|'+$('pet-time').value,status:'ocupado',species:$('pet-species').value,breed:$('pet-breed').value.trim()}]);};
+$('day').onchange=()=>{render();fillPet();};$('refresh').onclick=load;
+for(const [id,status]of [['block','ocupado'],['free','disponivel']])$(id).onclick=()=>{
+  const rows=state.slots.filter(s=>s.date===$('day').value&&s.status!==status);
+  if(!rows.length){$('status').textContent='O dia já está nesse estado.';return;}
+  if(confirm(`${status==='ocupado'?'Bloquear':'Liberar'} ${rows.length} horários de ${$('day').selectedOptions[0].textContent}?`))save(rows.map(s=>({key:s.date+'|'+s.time,status})));
+};load();
+</script></body></html>
